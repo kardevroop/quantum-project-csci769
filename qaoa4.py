@@ -1,22 +1,3 @@
-"""
-Extended QAOA Max-Cut experiment script for Proposal Section 4.
-
-Covers:
-1. Exact brute-force Max-Cut benchmark
-2. Noiseless simulation
-3. Noisy simulation using an IBM backend-derived noise model
-4. Optional real IBM Quantum hardware execution
-5. Metrics: cut value, approximation ratio, runtime
-6. Sweep over QAOA depth p
-
-Requirements:
-    pip install qiskit qiskit-aer qiskit-ibm-runtime networkx scipy numpy
-
-Optional for hardware:
-    - IBM Quantum account configured
-    - qiskit-ibm-runtime installed and authenticated
-"""
-
 from __future__ import annotations
 
 import itertools

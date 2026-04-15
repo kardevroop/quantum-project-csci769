@@ -1,16 +1,3 @@
-"""
-QAOA for Max-Cut (Proposal Section 3.2)
-
-Implements the QAOA workflow:
-1. Build a Max-Cut cost Hamiltonian from a graph
-2. Construct a QAOA circuit with alternating cost and mixer layers
-3. Optimize the variational parameters classically
-4. Sample the final circuit to obtain candidate Max-Cut solutions
-5. Compare against the exact brute-force optimum
-
-Tested conceptually against the current Qiskit-style QAOAAnsatz API.
-"""
-
 from __future__ import annotations
 
 import itertools
