@@ -14,7 +14,9 @@ class SingleRunResult:
     best_bitstring: str
     best_cut_value: int
     exact_cut_value: int
-    approximation_ratio: float
+    best_approximation_ratio: float
+    average_cut_value: float
+    average_approximation_ratio: float
     runtime_seconds: float
     shots: int
     optimizer_success: bool

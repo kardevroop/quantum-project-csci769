@@ -2,6 +2,11 @@ import csv
 import os
 import matplotlib.pyplot as plt
 from objects import ExperimentSummary
+from typing import Dict, List
+import networkx as nx
+from qiskit.visualization import circuit_drawer
+
+
 
 def summarize_by_depth(summary: ExperimentSummary) -> list[dict]:
     """Aggregate experiment results into table-friendly rows.
@@ -25,7 +30,8 @@ def summarize_by_depth(summary: ExperimentSummary) -> list[dict]:
                 "best_bitstring": r.best_bitstring,
                 "cut_value": r.best_cut_value,
                 "exact_cut_value": r.exact_cut_value,
-                "approximation_ratio": r.approximation_ratio,
+                "best_approximation_ratio": r.best_approximation_ratio,
+                "average_approximation_ratio": r.average_approximation_ratio,
                 "runtime_seconds": r.runtime_seconds,
                 "shots": r.shots,
                 "optimizer_success": r.optimizer_success,
@@ -116,6 +122,76 @@ def plot_metric_vs_depth(
     print(f"Saved plot to: {filename}")
 
 
+def plot_best_vs_average_ratio(
+    summary: ExperimentSummary,
+    outdir: str = "results",
+) -> None:
+    """Plot best vs average approximation ratio vs QAOA depth."""
+    os.makedirs(outdir, exist_ok=True)
+
+    # Convert results to rows
+    rows = []
+    for r in summary.results:
+        rows.append(
+            {
+                "setting": r.setting,
+                "depth": r.depth,
+                "best_ratio": r.best_approximation_ratio,
+                "avg_ratio": r.average_approximation_ratio,
+            }
+        )
+
+    # Group by setting
+    grouped: Dict[str, List[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["setting"], []).append(row)
+
+    for setting in grouped:
+        grouped[setting].sort(key=lambda x: x["depth"])
+
+    # Plot
+    plt.figure(figsize=(8, 5))
+
+    for setting, setting_rows in grouped.items():
+        depths = [r["depth"] for r in setting_rows]
+        best_vals = [r["best_ratio"] for r in setting_rows]
+        avg_vals = [r["avg_ratio"] for r in setting_rows]
+
+        # Best ratio (solid)
+        plt.plot(
+            depths,
+            best_vals,
+            marker="o",
+            linewidth=2,
+            label=f"{setting} (best)",
+        )
+
+        # Average ratio (dashed)
+        plt.plot(
+            depths,
+            avg_vals,
+            linestyle="--",
+            marker="x",
+            linewidth=2,
+            label=f"{setting} (avg)",
+        )
+
+    plt.xlabel("QAOA Depth $p$")
+    plt.ylabel("Approximation Ratio")
+    plt.title("Best vs Average Approximation Ratio vs QAOA Depth")
+
+    plt.xticks(sorted({r["depth"] for r in rows}))
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    path = os.path.join(outdir, "best_vs_avg_ratio.png")
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+    print(f"Saved: {path}")
+
+
 def generate_analysis_plots(summary: ExperimentSummary, outdir: str = "results") -> None:
     """Generate all proposal-motivated analysis plots.
 
@@ -145,9 +221,9 @@ def generate_analysis_plots(summary: ExperimentSummary, outdir: str = "results")
 
     plot_metric_vs_depth(
         rows=rows,
-        metric_key="approximation_ratio",
+        metric_key="best_approximation_ratio",
         ylabel="Approximation ratio",
-        filename=os.path.join(outdir, "approximation_ratio_vs_depth.png"),
+        filename=os.path.join(outdir, "best_approximation_ratio_vs_depth.png"),
         title="QAOA Approximation Ratio vs Circuit Depth",
     )
 
@@ -176,7 +252,7 @@ def print_depth_analysis(summary: ExperimentSummary) -> None:
     for setting, setting_rows in grouped.items():
         print(f"\nSetting: {setting}")
 
-        best_row = max(setting_rows, key=lambda x: x["approximation_ratio"])
+        best_row = max(setting_rows, key=lambda x: x["best_approximation_ratio"])
         fastest_row = min(setting_rows, key=lambda x: x["runtime_seconds"])
 
         print("Depth-by-depth metrics:")
@@ -184,13 +260,13 @@ def print_depth_analysis(summary: ExperimentSummary) -> None:
             print(
                 f"  p={row['depth']}: "
                 f"cut={row['cut_value']}, "
-                f"ratio={row['approximation_ratio']:.4f}, "
+                f"ratio={row['best_approximation_ratio']:.4f}, "
                 f"runtime={row['runtime_seconds']:.4f}s"
             )
 
         print(
             f"  Best solution quality at p={best_row['depth']} "
-            f"(ratio={best_row['approximation_ratio']:.4f}, "
+            f"(ratio={best_row['best_approximation_ratio']:.4f}, "
             f"cut={best_row['cut_value']})"
         )
         print(
@@ -204,7 +280,7 @@ def print_depth_analysis(summary: ExperimentSummary) -> None:
             print(
                 f"  Change from p={first['depth']} to p={last['depth']}: "
                 f"cut {first['cut_value']} -> {last['cut_value']}, "
-                f"ratio {first['approximation_ratio']:.4f} -> {last['approximation_ratio']:.4f}, "
+                f"ratio {first['best_approximation_ratio']:.4f} -> {last['best_approximation_ratio']:.4f}, "
                 f"runtime {first['runtime_seconds']:.4f}s -> {last['runtime_seconds']:.4f}s"
             )
 
@@ -224,3 +300,228 @@ def generate_full_report(summary: ExperimentSummary, outdir: str = "results") ->
     save_results_csv(summary, filename=csv_path)
     generate_analysis_plots(summary, outdir=outdir)
     print_depth_analysis(summary)
+
+
+
+def _summary_to_rows(summary: ExperimentSummary) -> List[dict]:
+    """Convert ExperimentSummary into plotting rows."""
+    rows = []
+
+    for r in summary.results:
+        rows.append(
+            {
+                "setting": r.setting,
+                "depth": r.depth,
+                "cut_value": r.best_cut_value,
+                "exact_cut_value": r.exact_cut_value,
+                "best_approximation_ratio": r.best_approximation_ratio,
+                "average_approximation_ratio": r.average_approximation_ratio,
+                "runtime_seconds": r.runtime_seconds,
+            }
+        )
+
+    return sorted(rows, key=lambda x: (x["setting"], x["depth"]))
+
+
+def _group_by_setting(rows: List[dict]) -> Dict[str, List[dict]]:
+    """Group rows by noiseless/noisy/hardware setting."""
+    grouped = {}
+
+    for row in rows:
+        grouped.setdefault(row["setting"], []).append(row)
+
+    for setting in grouped:
+        grouped[setting].sort(key=lambda x: x["depth"])
+
+    return grouped
+
+
+def plot_depth_tradeoff(
+    summary: ExperimentSummary,
+    metric_key: str,
+    ylabel: str,
+    title: str,
+    output_path: str,
+) -> None:
+    """Plot one metric against QAOA depth."""
+    rows = _summary_to_rows(summary)
+    grouped = _group_by_setting(rows)
+
+    plt.figure(figsize=(8, 5))
+
+    for setting, setting_rows in grouped.items():
+        depths = [row["depth"] for row in setting_rows]
+        values = [row[metric_key] for row in setting_rows]
+
+        plt.plot(
+            depths,
+            values,
+            marker="o",
+            linewidth=2,
+            label=setting.capitalize(),
+        )
+
+    plt.xlabel("QAOA Depth $p$")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.xticks(sorted({row["depth"] for row in rows}))
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+    print(f"Saved: {output_path}")
+
+
+def generate_depth_tradeoff_plots(
+    summary: ExperimentSummary,
+    outdir: str = "results",
+) -> None:
+    """Generate all depth tradeoff plots."""
+    os.makedirs(outdir, exist_ok=True)
+
+    plot_depth_tradeoff(
+        summary=summary,
+        metric_key="cut_value",
+        ylabel="Best Cut Value",
+        title="Best Cut Value vs QAOA Depth",
+        output_path=os.path.join(outdir, "cut_value_vs_depth.png"),
+    )
+
+    plot_depth_tradeoff(
+        summary=summary,
+        metric_key="approximation_ratio",
+        ylabel="Approximation Ratio",
+        title="Approximation Ratio vs QAOA Depth",
+        output_path=os.path.join(outdir, "approximation_ratio_vs_depth.png"),
+    )
+
+    plot_depth_tradeoff(
+        summary=summary,
+        metric_key="runtime_seconds",
+        ylabel="Runtime (seconds)",
+        title="Runtime vs QAOA Depth",
+        output_path=os.path.join(outdir, "runtime_vs_depth.png"),
+    )
+
+
+def plot_graph_structure(
+    graph: nx.Graph,
+    outdir: str = "results",
+    filename: str = "graph_structure.png",
+) -> None:
+    """Plot and save the generated graph."""
+    os.makedirs(outdir, exist_ok=True)
+
+    plt.figure(figsize=(6, 6))
+
+    pos = nx.spring_layout(graph, seed=42)
+
+    nx.draw(
+        graph,
+        pos,
+        with_labels=True,
+        node_size=800,
+        font_size=10,
+    )
+
+    plt.title("Generated Graph")
+    plt.tight_layout()
+
+    path = os.path.join(outdir, filename)
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+    print(f"Saved: {path}")
+
+
+def plot_qaoa_circuit(
+    ansatz,
+    outdir: str = "results",
+    filename: str = "qaoa_circuit.png",
+) -> None:
+    """Save QAOA circuit diagram."""
+    os.makedirs(outdir, exist_ok=True)
+
+    path = os.path.join(outdir, filename)
+
+    circuit_drawer(
+        ansatz,
+        output="mpl",
+        filename=path,
+        fold=-1,  # full-width circuit
+    )
+
+    print(f"Saved: {path}")
+
+
+def plot_classical_vs_quantum_maxcut(
+    summary: ExperimentSummary,
+    outdir: str = "results_maxcut",
+) -> None:
+    """Compare exact classical Max-Cut with QAOA approximations.
+
+    Uses:
+        exact_cut_value      -> exact classical Max-Cut value
+        best_cut_value       -> best sampled QAOA cut value
+        average_cut_value    -> average sampled QAOA cut value
+    """
+    os.makedirs(outdir, exist_ok=True)
+
+    grouped: Dict[str, List] = {}
+    for r in summary.results:
+        grouped.setdefault(r.setting, []).append(r)
+
+    for setting in grouped:
+        grouped[setting].sort(key=lambda x: x.depth)
+
+    exact_cut_value = summary.exact_cut_value
+    all_depths = sorted({r.depth for r in summary.results})
+
+    plt.figure(figsize=(9, 5.5))
+
+    # Classical exact baseline
+    plt.axhline(
+        y=exact_cut_value,
+        linestyle=":",
+        linewidth=2.5,
+        label=f"Classical exact Max-Cut = {exact_cut_value}",
+    )
+
+    # Quantum approximations
+    for setting, results in grouped.items():
+        depths = [r.depth for r in results]
+        best_values = [r.best_cut_value for r in results]
+        avg_values = [r.average_cut_value for r in results]
+
+        plt.plot(
+            depths,
+            best_values,
+            marker="o",
+            linewidth=2,
+            label=f"{setting} best QAOA",
+        )
+
+        plt.plot(
+            depths,
+            avg_values,
+            marker="x",
+            linestyle="--",
+            linewidth=2,
+            label=f"{setting} average QAOA",
+        )
+
+    plt.xlabel("QAOA Depth $p$")
+    plt.ylabel("Cut Value")
+    plt.title("Classical Max-Cut vs QAOA Approximation")
+    plt.xticks(all_depths)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    path = os.path.join(outdir, "classical_vs_quantum_maxcut.png")
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+    print(f"Saved: {path}")

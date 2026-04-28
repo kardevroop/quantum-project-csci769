@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -15,6 +16,18 @@ from noise_models import (
     make_custom_noise_model, 
     make_noisy_simulator, 
     make_noisy_simulator_from_ibm_backend,
+)
+from builder import (
+    build_connected_random_graph,
+    build_random_graph,
+    build_weighted_random_graph,
+)
+from helper import (
+    generate_full_report, 
+    plot_best_vs_average_ratio,
+    plot_graph_structure,
+    plot_qaoa_circuit,
+    plot_classical_vs_quantum_maxcut,
 )
 
 from qiskit import transpile
@@ -47,6 +60,16 @@ def maxcut_value(bitstring: str, graph: nx.Graph) -> int:
         if bitstring[u] != bitstring[v]:
             value += 1
     return value
+
+def average_cut_from_counts(counts: Dict[str, int], graph: nx.Graph) -> float:
+    total = sum(counts.values())
+    if total == 0:
+        return 0.0
+
+    return sum(
+        maxcut_value(bitstring, graph) * count
+        for bitstring, count in counts.items()
+    ) / total
 
 
 def brute_force_maxcut(graph: nx.Graph) -> Tuple[str, int]:
@@ -297,7 +320,9 @@ def run_single_setting(
     seed: int = 42,
     maxiter: int = 200,
     backend_name: Optional[str] = None,
+    noise_type: str = None,
     noisy_use_backend_topology: bool = False,
+    save_dir: str = "results"
 ) -> SingleRunResult:
     """Run one experiment for one QAOA depth and one execution setting.
 
@@ -324,6 +349,11 @@ def run_single_setting(
         seed=seed,
         maxiter=maxiter,
     )
+    plot_qaoa_circuit(
+        ansatz,
+        outdir=os.path.join(save_dir,"qaoa_circuit"),
+        filename=f"qaoa_circuit_{reps}_{setting}.png"
+    )
 
     if setting == "noiseless":
         counts = sample_noiseless(ansatz, optimal_params, shots=shots)
@@ -336,7 +366,7 @@ def run_single_setting(
         #     enforce_backend_topology=noisy_use_backend_topology,
         # )
 
-        simulator = make_noisy_simulator()
+        simulator = make_noisy_simulator(type=noise_type)
 
         counts = sample_with_aer_backend(
             ansatz=ansatz,
@@ -361,8 +391,15 @@ def run_single_setting(
 
     runtime_seconds = time.perf_counter() - start
     best_bitstring, best_cut_value = extract_best_bitstring(counts, graph)
-    approximation_ratio = (
+    
+    best_approximation_ratio = (
         best_cut_value / exact_cut_value if exact_cut_value > 0 else 1.0
+    )
+
+    average_cut_value = average_cut_from_counts(counts, graph)
+
+    average_approximation_ratio = (
+        average_cut_value / exact_cut_value if exact_cut_value > 0 else 1.0
     )
 
     return SingleRunResult(
@@ -371,7 +408,9 @@ def run_single_setting(
         best_bitstring=best_bitstring,
         best_cut_value=best_cut_value,
         exact_cut_value=exact_cut_value,
-        approximation_ratio=approximation_ratio,
+        best_approximation_ratio=best_approximation_ratio,
+        average_cut_value=average_cut_value,
+        average_approximation_ratio=average_approximation_ratio,
         runtime_seconds=runtime_seconds,
         shots=shots,
         optimizer_success=bool(opt_result.success),
@@ -387,10 +426,12 @@ def run_full_experiment(
     shots: int = 2048,
     seed: int = 42,
     maxiter: int = 200,
+    noise_type: Optional[str] = None,
     include_noisy: bool = True,
     include_hardware: bool = False,
     backend_name: Optional[str] = None,
     noisy_use_backend_topology: bool = False,
+    save_dir: str = "results",
 ) -> ExperimentSummary:
     """Run the full Section 4 experiment sweep."""
     exact_bitstring, exact_cut_value = brute_force_maxcut(graph)
@@ -416,7 +457,9 @@ def run_full_experiment(
                     seed=seed,
                     maxiter=maxiter,
                     backend_name=backend_name,
+                    noise_type=noise_type,
                     noisy_use_backend_topology=noisy_use_backend_topology,
+                    save_dir=save_dir,
                 )
                 results.append(run_result)
             except Exception as exc:
@@ -450,7 +493,8 @@ def print_summary(summary: ExperimentSummary) -> None:
         print(f"Depth p            : {r.depth}")
         print(f"Best bitstring     : {r.best_bitstring}")
         print(f"Best cut value     : {r.best_cut_value}")
-        print(f"Approximation ratio: {r.approximation_ratio:.4f}")
+        print(f"Best Approximation ratio: {r.best_approximation_ratio:.4f}")
+        print(f"Avg Approximation ratio: {r.average_approximation_ratio:.4f}")
         print(f"Runtime (sec)      : {r.runtime_seconds:.4f}")
         print(f"Optimizer success  : {r.optimizer_success}")
         print(f"Objective value    : {r.optimizer_fun:.6f}")
@@ -474,7 +518,8 @@ def results_as_table(summary: ExperimentSummary) -> List[dict]:
                 "best_bitstring": r.best_bitstring,
                 "best_cut_value": r.best_cut_value,
                 "exact_cut_value": r.exact_cut_value,
-                "approximation_ratio": round(r.approximation_ratio, 4),
+                "best_approximation_ratio": round(r.best_approximation_ratio, 4),
+                "average_approximation_ratio": round(r.average_approximation_ratio, 4),
                 "runtime_seconds": round(r.runtime_seconds, 4),
                 "shots": r.shots,
                 "optimizer_success": r.optimizer_success,
@@ -536,7 +581,19 @@ def build_dense_graph_6() -> nx.Graph:
 # ---------------------------------------------------------------------
 
 if __name__ == "__main__":
-    graph = build_dense_graph_6()
+    # graph = build_dense_graph_6()
+    nodes = 7
+    noise_type = "all"
+
+    save_dir = f"results_v{nodes}_n{noise_type}"
+
+    graph = build_connected_random_graph(
+        n_nodes=nodes,
+        edge_prob=0.7,
+        seed=42,
+    )
+    plot_graph_structure(graph, outdir=save_dir)
+
     depths = [1, 2, 4, 8, 16]
 
     summary = run_full_experiment(
@@ -545,14 +602,28 @@ if __name__ == "__main__":
         shots=2048,
         seed=42,
         maxiter=200,
+        noise_type=noise_type,
         include_noisy=True,
         include_hardware=True,
         backend_name="ibm_kingston",
         noisy_use_backend_topology=False,  # set True only if you want coupling-map constraints too
+        save_dir=save_dir,
     )
 
     print_summary(summary)
-    generate_full_report(summary, outdir="results")
+    generate_full_report(summary, outdir=save_dir)
+    # generate_depth_tradeoff_plots(
+    #     summary=summary,
+    #     outdir=save_dir,
+    # )
+    plot_best_vs_average_ratio(
+        summary=summary,
+        outdir=save_dir,
+    )
+    plot_classical_vs_quantum_maxcut(
+        summary=summary,
+        outdir=save_dir,
+    )
 
     print("\nCompact results table:")
     for row in results_as_table(summary):
